@@ -5,15 +5,23 @@
 #define NUM_MENU_ITEMS 36
 #define MENU_HEADER "Parking lots"
   
+enum {
+  LOT_KEY_ID = 0x0,
+  LOT_KEY_FREE = 0x1,
+  LOT_KEY_TOTAL = 0x2,
+  LOT_KEY_NAME = 0x3,
+};
+  
 typedef struct {
-  char free[5];
-  char total[5];
-  const char *name;
+  char *free;
+  char *total;
+  char *name;
 } lot;
 
 static void populate_lots();
+static void destroy_lots();
 
-static lot lots[NUM_MENU_ITEMS];
+static lot *lots[NUM_MENU_ITEMS];
 static bool populated = false;
 
 static Window *s_main_window;
@@ -42,16 +50,60 @@ static void menu_draw_header_callback(GContext* ctx, const Layer *cell_layer, ui
 }
 
 static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuIndex *cell_index, void *data) {
-  lot current_lot = lots[cell_index->row];
+  lot* current_lot = lots[cell_index->row];
   char buf[10]; // Assuming parking lot capacity will not exceed 9999
-  snprintf(buf, 10, "%s/%s", current_lot.free, current_lot.total);
-  menu_cell_basic_draw(ctx, cell_layer, current_lot.name, buf, NULL);
+  snprintf(buf, 10, "%s/%s", current_lot->free, current_lot->total);
+  menu_cell_basic_draw(ctx, cell_layer, current_lot->name, buf, NULL);
 }
 
+static bool card_shown = false;
+
+static const char* full = "Full";
+
 static void update_card() {
-  text_layer_set_text(s_free_layer, s_card_lot->free);
+  if(s_card_lot->free[0] == '0') {
+    text_layer_set_text(s_free_layer, full);
+  } else {
+    text_layer_set_text(s_free_layer, s_card_lot->free);
+  }
   text_layer_set_text(s_total_layer, s_card_lot->total);
   text_layer_set_text(s_name_layer, s_card_lot->name);
+}
+
+static lot *lot_new(char* name){
+  char* total = "1500";
+  size_t name_size = strlen(name);
+  size_t num_size = strlen(total);
+  lot *ret = malloc(sizeof(lot));
+  *ret = (lot){malloc(num_size), malloc(num_size), malloc(name_size)};
+  strncpy(ret->name, name, name_size);
+  strncpy(ret->total, total, num_size);
+  strncpy(ret->free, "0", num_size);
+  return ret;
+}
+
+static void lot_destroy(lot *current_lot) {
+  free(current_lot->free);
+  free(current_lot->total);
+  free(current_lot->name);
+  free(current_lot);
+}
+
+static void in_received_handler(DictionaryIterator *iter, void *context) {
+  Tuple *id_tuple = dict_find(iter, LOT_KEY_ID);
+  Tuple *free_tuple = dict_find(iter, LOT_KEY_FREE);
+  Tuple *total_tuple = dict_find(iter, LOT_KEY_TOTAL);
+  Tuple *name_tuple = dict_find(iter, LOT_KEY_NAME);
+  
+  uint8_t id = id_tuple->value->uint8;
+  if(id >= NUM_MENU_ITEMS) {
+    // log error
+    return;
+  }
+  
+  if(!lots[id]) {
+    lots[id] = lot_new(name_tuple->value->cstring);
+  }
 }
 
 static void card_window_load(Window *window) {
@@ -84,20 +136,18 @@ static void card_window_load(Window *window) {
   layer_add_child(window_layer, text_layer_get_layer(s_name_layer));
   
   update_card();
+  
+  card_shown = true;
 }
 
 static void card_window_unload(Window *window) {
   text_layer_destroy(s_free_layer);
   text_layer_destroy(s_total_layer);
+  card_shown = false;
 }
 
 static void menu_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, void *data) {
-  s_card_lot = &lots[cell_index->row];
-  s_card_window = window_create();
-  window_set_window_handlers(s_card_window, (WindowHandlers) {
-    .load = card_window_load,
-    .unload = card_window_unload,
-  });
+  s_card_lot = lots[cell_index->row];
   window_stack_push(s_card_window, true);
 }
 
@@ -130,26 +180,36 @@ static void main_window_unload(Window *window) {
 
 static void init() {
   populate_lots();
+  
+  // register handlers
+  
+  app_message_open(80, 64);
+  
   s_main_window = window_create();
   window_set_window_handlers(s_main_window, (WindowHandlers) {
     .load = main_window_load,
     .unload = main_window_unload,
   });
+  
+  s_card_window = window_create();
+  window_set_window_handlers(s_card_window, (WindowHandlers) {
+    .load = card_window_load,
+    .unload = card_window_unload,
+  });
+  
   window_stack_push(s_main_window, true);
 }
 
 static void deinit() {
   window_destroy(s_main_window);
+  window_destroy(s_card_window);
+  destroy_lots();
 }
 
 int main(void) {
   init();
   app_event_loop();
   deinit();
-}
-
-static lot lot_new(const char* name){
-  return (lot) {"1500", "2500", name};
 }
 
 static void populate_lots() {
@@ -190,4 +250,10 @@ static void populate_lots() {
   lots[34] = lot_new("CE-P05 Euro Parking");
   lots[35] = lot_new("ZO-P03 Mikado");
   populated = true;
+}
+
+static void destroy_lots() {
+  for(int i = 0;i < NUM_MENU_ITEMS;i++) {
+    lot_destroy(lots[i]);
+  }
 }
